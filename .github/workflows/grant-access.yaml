@@ -14,40 +14,38 @@ jobs:
       # Step 1: Checkout repo
       - uses: actions/checkout@v3
 
-      # Step 2: Get latest submission file
-      - name: Get latest quiz JSON
-        id: read
+      # Step 2: Parse JSON and add collaborator
+      - name: Process latest quiz submission
         run: |
+          # Get the latest file
           FILE=$(ls quiz-results | sort | tail -n 1)
-          echo "file=$FILE" >> $GITHUB_OUTPUT
-          CONTENT=$(cat quiz-results/$FILE)
-          echo "json=$CONTENT" >> $GITHUB_OUTPUT
+          echo "Processing $FILE"
 
-      # Step 3: Parse JSON for github_username and studentID
-      - name: Parse submission
-        id: parse
-        run: |
-          JSON='${{ steps.read.outputs.json }}'
-          USERNAME=$(echo $JSON | jq -r '.github_username')
-          STUDENTID=$(echo $JSON | jq -r '.studentID')
-          echo "username=$USERNAME" >> $GITHUB_OUTPUT
-          echo "studentID=$STUDENTID" >> $GITHUB_OUTPUT
+          # Read file content
+          JSON=$(cat quiz-results/$FILE)
 
-      # Step 4: Basic whitelist check (optional spam protection)
-      - name: Whitelist validation
-        id: whitelist
-        run: |
-          # Example: only allow student IDs starting with 's'
-          if [[ "${{ steps.parse.outputs.studentID }}" != s* ]]; then
-            echo "Student ID invalid, aborting"
+          # Extract github_username and studentID
+          USERNAME=$(echo "$JSON" | jq -r '.github_username')
+          STUDENTID=$(echo "$JSON" | jq -r '.studentID')
+
+          echo "Username: $USERNAME"
+          echo "Student ID: $STUDENTID"
+
+          # Step 3: Basic whitelist check (spam protection)
+          if [[ "$STUDENTID" != s* ]]; then
+            echo "Student ID invalid or suspicious, aborting"
             exit 1
           fi
 
-      # Step 5: Grant write access
-      - name: Add as collaborator
-        run: |
+          # Optional: additional GitHub username validation
+          if ! [[ "$USERNAME" =~ ^[a-zA-Z0-9-]+$ ]]; then
+            echo "Invalid GitHub username, aborting"
+            exit 1
+          fi
+
+          # Step 4: Add collaborator
           curl -X PUT \
             -H "Authorization: token ${{ secrets.PDE_ADMIN_PAT }}" \
             -H "Accept: application/vnd.github.v3+json" \
-            https://api.github.com/repos/patrickandersondeakin/test_pde/collaborators/${{ steps.parse.outputs.username }}_
-
+            https://api.github.com/repos/patrickandersondeakin/test_pde/collaborators/$USERNAME \
+            -d '{"permission": "push"}'
