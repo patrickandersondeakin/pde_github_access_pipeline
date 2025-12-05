@@ -1,5 +1,6 @@
 name: Grant Write Access for Passed Students
 
+# Trigger whenever a new JSON file is added to quiz-results folder
 on:
   push:
     paths:
@@ -10,40 +11,66 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      # Step 1: Checkout repo
       - uses: actions/checkout@v3
 
-      - name: Process latest quiz submission
+      # Step 2: Process latest quiz JSON
+      - name: Process latest quiz submission and grant access
         run: |
-          # Get latest JSON file
+          # Get the latest file
           FILE=$(ls quiz-results | sort | tail -n 1)
-          echo "Processing $FILE"
+          echo "Processing file: $FILE"
 
-          # Read JSON directly
+          # Read the JSON file (multi-line safe)
           JSON=$(cat "quiz-results/$FILE")
 
-          # Use jq to extract values
+          # Parse github_username and studentID
           USERNAME=$(echo "$JSON" | jq -r '.github_username')
           STUDENTID=$(echo "$JSON" | jq -r '.studentID')
+          NAME=$(echo "$JSON" | jq -r '.name')
+          TIMESTAMP=$(echo "$JSON" | jq -r '.timestamp')
 
+          echo "Parsed values:"
           echo "Username: $USERNAME"
-          echo "Student ID: $STUDENTID"
+          echo "StudentID: $STUDENTID"
+          echo "Name: $NAME"
+          echo "Timestamp: $TIMESTAMP"
 
-          # Basic whitelist (spam protection)
+          # Step 3: Spam/bot protection
           if [[ "$STUDENTID" != s* ]]; then
-            echo "Student ID invalid, aborting"
+            echo "Invalid studentID, aborting"
             exit 1
           fi
 
-          # GitHub username validation
           if ! [[ "$USERNAME" =~ ^[a-zA-Z0-9-]+$ ]]; then
             echo "Invalid GitHub username, aborting"
             exit 1
           fi
 
-          # Add collaborator via GitHub API
+          # Step 4: Grant write access via GitHub API
           curl -X PUT \
             -H "Authorization: token ${{ secrets.PDE_ADMIN_PAT }}" \
             -H "Accept: application/vnd.github.v3+json" \
             https://api.github.com/repos/patrickandersondeakin/test_pde/collaborators/$USERNAME \
             -d '{"permission": "push"}'
 
+      # Step 5: Update Markdown dashboard
+      - name: Update STUDENT_ACCESS.md
+        run: |
+          DASH_FILE="STUDENT_ACCESS.md"
+          # Create file if it doesn't exist
+          if [ ! -f "$DASH_FILE" ]; then
+            echo "# Student Access Dashboard" > "$DASH_FILE"
+            echo "| Timestamp | Name | GitHub Username | StudentID |" >> "$DASH_FILE"
+            echo "|----------|------|----------------|-----------|" >> "$DASH_FILE"
+          fi
+
+          # Append the new entry
+          echo "| $TIMESTAMP | $NAME | $USERNAME | $STUDENTID |" >> "$DASH_FILE"
+
+          # Commit the dashboard update
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add "$DASH_FILE"
+          git commit -m "Update STUDENT_ACCESS.md with $USERNAME"
+          git push
