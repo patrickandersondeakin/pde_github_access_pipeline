@@ -1,74 +1,87 @@
-name: Grant Write Access for Passed Students
+name: Grant Repository Access From Quiz Results
 
-# Trigger whenever a new JSON file is added to quiz-results folder
 on:
+  workflow_dispatch:
   push:
     paths:
       - "quiz-results/*.json"
 
+permissions:
+  contents: write        # Required for pushing updates to the repo
+  administration: write  # Required for adding collaborators via API
+
 jobs:
-  grant_access:
+  process_quiz:
     runs-on: ubuntu-latest
 
     steps:
-      # Step 1: Checkout repo
-      - uses: actions/checkout@v3
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      # Step 2: Process latest quiz JSON
-      - name: Process latest quiz submission and grant access
+      - name: Find latest quiz results JSON file
+        id: findfile
         run: |
-          # Get the latest file
-          FILE=$(ls quiz-results | sort | tail -n 1)
-          echo "Processing file: $FILE"
+          LATEST_FILE=$(ls -t quiz-results/*.json | head -n 1)
+          echo "file=$LATEST_FILE" >> $GITHUB_OUTPUT
+          echo "Processing JSON file: $LATEST_FILE"
 
-          # Read the JSON file (multi-line safe)
-          JSON=$(cat "quiz-results/$FILE")
+      - name: Parse JSON values
+        id: parsejson
+        run: |
+          FILE="${{ steps.findfile.outputs.file }}"
 
-          # Parse github_username and studentID
-          USERNAME=$(echo "$JSON" | jq -r '.github_username')
-          STUDENTID=$(echo "$JSON" | jq -r '.studentID')
-          NAME=$(echo "$JSON" | jq -r '.name')
-          TIMESTAMP=$(echo "$JSON" | jq -r '.timestamp')
+          USERNAME=$(jq -r '.github_username' "$FILE")
+          STUDENTID=$(jq -r '.studentID' "$FILE")
+          NAME=$(jq -r '.name' "$FILE")
+          TIMESTAMP=$(jq -r '.timestamp' "$FILE")
 
-          echo "Parsed values:"
           echo "Username: $USERNAME"
           echo "StudentID: $STUDENTID"
           echo "Name: $NAME"
           echo "Timestamp: $TIMESTAMP"
 
-          # Step 3: Spam/bot protection
+          echo "USERNAME=$USERNAME" >> $GITHUB_ENV
+          echo "STUDENTID=$STUDENTID" >> $GITHUB_ENV
+          echo "NAME=$NAME" >> $GITHUB_ENV
+          echo "TIMESTAMP=$TIMESTAMP" >> $GITHUB_ENV
+
+      - name: Validate studentID and username (anti-spam)
+        run: |
           if [[ "$STUDENTID" != s* ]]; then
-            echo "Invalid studentID, aborting"
+            echo "Invalid studentID — must begin with 's'. Aborting."
             exit 1
           fi
 
           if ! [[ "$USERNAME" =~ ^[a-zA-Z0-9-]+$ ]]; then
-            echo "Invalid GitHub username, aborting"
+            echo "Invalid GitHub username. Aborting."
             exit 1
           fi
 
-          # Step 4: Grant write access via GitHub API
+      - name: Grant repository access to student
+        run: |
           curl -X PUT \
             -H "Authorization: token ${{ secrets.PDE_ADMIN_PAT }}" \
             -H "Accept: application/vnd.github.v3+json" \
             https://api.github.com/repos/patrickandersondeakin/test_pde/collaborators/$USERNAME \
             -d '{"permission": "push"}'
 
-      # Step 5: Update Markdown dashboard
-      - name: Update STUDENT_ACCESS.md
+      - name: Update STUDENT_ACCESS.md dashboard
         run: |
           DASH_FILE="STUDENT_ACCESS.md"
-          # Create file if it doesn't exist
+
+          # Create dashboard file if missing
           if [ ! -f "$DASH_FILE" ]; then
             echo "# Student Access Dashboard" > "$DASH_FILE"
             echo "| Timestamp | Name | GitHub Username | StudentID |" >> "$DASH_FILE"
-            echo "|----------|------|----------------|-----------|" >> "$DASH_FILE"
+            echo "|-----------|------|------------------|-----------|" >> "$DASH_FILE"
           fi
 
-          # Append the new entry
+          # Append a new line for this student
           echo "| $TIMESTAMP | $NAME | $USERNAME | $STUDENTID |" >> "$DASH_FILE"
 
-          # Commit the dashboard update
+          # Commit and push dashboard update
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add "$DASH_FILE"
